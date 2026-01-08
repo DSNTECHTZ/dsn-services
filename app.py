@@ -1,8 +1,7 @@
 # Filename: app.py
-# Requirements: fastapi, requests, python-dotenv, uvicorn
-# Install with: pip install fastapi requests python-dotenv uvicorn
+# Install dependencies: pip install fastapi requests python-dotenv uvicorn
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import requests
 import os
@@ -15,15 +14,11 @@ app = FastAPI(title="Match Prediction AI Engine")
 # ----------------------
 # Environment Variables
 # ----------------------
-# HUGGINGFACE_API_KEY is your Hugging Face API key
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 if not HF_API_KEY:
     raise Exception("Please set your HUGGINGFACE_API_KEY in .env file")
 
-# SportSRC feed URL (example: football matches)
 SPORTSRC_URL = "https://api.sportsrc.org/?data=matches&category=football"  
-
-# Hugging Face Model
 HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 # ----------------------
@@ -34,6 +29,20 @@ class PredictionRequest(BaseModel):
     away_team: str
 
 # ----------------------
+# Root Route for Testing
+# ----------------------
+@app.get("/")
+def root():
+    return {"status": "API is running!", "message": "Use POST /predict with JSON body {'home_team': 'Team A', 'away_team': 'Team B'}"}
+
+# ----------------------
+# Friendly GET /predict handler
+# ----------------------
+@app.get("/predict")
+def get_predict_info():
+    return {"detail": "Please use POST /predict with JSON body {'home_team': 'Team A', 'away_team': 'Team B'}"}
+
+# ----------------------
 # Helper Functions
 # ----------------------
 def fetch_current_matches():
@@ -42,7 +51,7 @@ def fetch_current_matches():
         response = requests.get(SPORTSRC_URL)
         response.raise_for_status()
         data = response.json()
-        return data  # raw JSON data
+        return data
     except Exception as e:
         print(f"Error fetching data: {e}")
         return []
@@ -92,18 +101,18 @@ def query_huggingface(prompt):
     response = requests.post(
         f"https://api-inference.huggingface.co/models/{HF_MODEL}",
         headers=headers,
-        json=payload
+        json=payload,
+        timeout=60  # avoid hanging requests
     )
     
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail=f"Model inference failed: {response.text}")
     
     result = response.json()
-    # Hugging Face returns a list with 'generated_text'
     return result[0]["generated_text"] if isinstance(result, list) else str(result)
 
 # ----------------------
-# API Endpoint
+# Main POST /predict Route
 # ----------------------
 @app.post("/predict")
 def predict_winner(request: PredictionRequest):
@@ -127,6 +136,9 @@ def predict_winner(request: PredictionRequest):
     return {"prediction": prediction}
 
 # ----------------------
-# Run locally: uvicorn app:app --reload
-# On Render: it will auto-detect FastAPI
+# Run locally:
+# uvicorn app:app --reload
+# On Render, it auto-detects FastAPI
 # ----------------------
+
+
