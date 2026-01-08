@@ -1,144 +1,108 @@
-# Filename: app.py
-# Install dependencies: pip install fastapi requests python-dotenv uvicorn
-
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
-import requests
 import os
+import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env
+load_dotenv()
 
-app = FastAPI(title="Match Prediction AI Engine")
+app = FastAPI()
 
-# ----------------------
-# Environment Variables
-# ----------------------
-HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-if not HF_API_KEY:
-    raise Exception("Please set your HUGGINGFACE_API_KEY in .env file")
+SPORTDB_KEY = os.getenv("SPORTDB_API_KEY")
+HF_KEY = os.getenv("HF_API_KEY")
 
-SPORTSRC_URL = "https://api.sportsrc.org/?data=matches&category=football"  
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+assert SPORTDB_KEY, "SPORTDB_API_KEY missing"
+assert HF_KEY, "HF_API_KEY missing"
 
-# ----------------------
-# Request Body Model
-# ----------------------
-class PredictionRequest(BaseModel):
-    home_team: str
-    away_team: str
+# --------- Request Body ---------
+class PredictRequest(BaseModel):
+    teamA: str
+    teamB: str
+    competition: str = ""
 
-# ----------------------
-# Root Route for Testing
-# ----------------------
-@app.get("/")
-def root():
-    return {"status": "API is running!", "message": "Use POST /predict with JSON body {'home_team': 'Team A', 'away_team': 'Team B'}"}
 
-# ----------------------
-# Friendly GET /predict handler
-# ----------------------
-@app.get("/predict")
-def get_predict_info():
-    return {"detail": "Please use POST /predict with JSON body {'home_team': 'Team A', 'away_team': 'Team B'}"}
+# --------- Fetch Live Data from SportDB.dev ---------
+def fetch_live_match(teamA: str, teamB: str):
+    base_url = "https://sportdb.dev/api/football/live"
+    headers = {"X-API-KEY": SPORTDB_KEY}
+    resp = requests.get(base_url, headers=headers)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Error fetching match data")
+    data = resp.json()
 
-# ----------------------
-# Helper Functions
-# ----------------------
-def fetch_current_matches():
-    """Fetch live matches JSON from SportSRC feed"""
-    try:
-        response = requests.get(SPORTSRC_URL)
-        response.raise_for_status()
-        data = response.json()
-        return data
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return []
-
-def find_match_data(home_team, away_team, matches):
-    """Find specific match by team names"""
-    for match in matches:
-        ht = match.get("home_team", "").lower()
-        at = match.get("away_team", "").lower()
-        if ht == home_team.lower() and at == away_team.lower():
-            return match
+    # Find a match that includes the given teams
+    for m in data.get("data", []):
+        h = m.get("home_team", "").lower()
+        a = m.get("away_team", "").lower()
+        if teamA.lower() in h and teamB.lower() in a:
+            return m
     return None
 
-def build_prompt(match_data):
-    """Build a prompt for AI to reason about winner"""
-    if not match_data:
-        return "No match data available for the selected teams."
-    
-    prompt = f"""
-You are a sports analyst AI. Given the following match data, predict which team is more likely to win and explain why:
 
-Home Team: {match_data.get('home_team')}
-Away Team: {match_data.get('away_team')}
-Home Form (last 5 matches): {match_data.get('home_form', 'N/A')}
-Away Form (last 5 matches): {match_data.get('away_form', 'N/A')}
-Head-to-Head: {match_data.get('head_to_head', 'N/A')}
-Injuries: {match_data.get('injuries', 'N/A')}
-Home Advantage: {match_data.get('home_advantage', 'N/A')}
-Other Stats: {match_data.get('other_stats', 'N/A')}
+# --------- Build Prompt ---------
+def build_prompt(match_data: dict):
+    home = match_data.get("home_team")
+    away = match_data.get("away_team")
+    stats = match_data.get("stats", {})
 
-Provide your prediction clearly, reasoning, and probability estimate for each outcome (Home win, Draw, Away win).
-"""
+    # Build simple text block for AI prompt
+    prompt = (
+        f"Given the match between {home} and {away}:\n"
+        f"Score: {match_data.get('score', 'N/A')}\n"
+        f"Match status: {match_data.get('status', 'unknown')}\n"
+        f"Stats available: {stats}\n\n"
+        "Based on this information, predict who "
+        "is more likely to win and explain why in detail."
+    )
     return prompt
 
-def query_huggingface(prompt):
-    """Call Hugging Face Inference API with Mistral 7B Instruct"""
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+
+# --------- Call Hugging Face Inference API ---------
+def call_hf(prompt: str):
+    HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+    url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+
+    headers = {
+        "Authorization": f"Bearer {HF_KEY}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "inputs": prompt,
+        "inputs": f"<s>[INST] {prompt} [/INST]",
         "parameters": {
-            "max_new_tokens": 300,
-            "temperature": 0.7,
-            "return_full_text": True
+            "max_new_tokens": 256,
+            "temperature": 0.7
         }
     }
 
-    response = requests.post(
-        f"https://api-inference.huggingface.co/models/{HF_MODEL}",
-        headers=headers,
-        json=payload,
-        timeout=60  # avoid hanging requests
-    )
-    
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Model inference failed: {response.text}")
-    
-    result = response.json()
-    return result[0]["generated_text"] if isinstance(result, list) else str(result)
+    resp = requests.post(url, json=payload, headers=headers)
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Hugging Face error: {resp.text}"
+        )
+    return resp.json()
 
-# ----------------------
-# Main POST /predict Route
-# ----------------------
+
+# --------- API Endpoint ---------
 @app.post("/predict")
-def predict_winner(request: PredictionRequest):
-    # Step 1: Fetch live matches
-    matches = fetch_current_matches()
-    if not matches:
-        raise HTTPException(status_code=500, detail="Failed to fetch live match data")
-    
-    # Step 2: Find requested match
-    match_data = find_match_data(request.home_team, request.away_team, matches)
-    if not match_data:
-        raise HTTPException(status_code=404, detail="Match not found in current data")
-    
-    # Step 3: Build AI prompt
-    prompt = build_prompt(match_data)
-    
-    # Step 4: Query Hugging Face model
-    prediction = query_huggingface(prompt)
-    
-    # Step 5: Return result
-    return {"prediction": prediction}
+def predict(req: PredictRequest):
+    match = fetch_live_match(req.teamA, req.teamB)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found or not live")
 
-# ----------------------
-# Run locally:
-# uvicorn app:app --reload
-# On Render, it auto-detects FastAPI
-# ----------------------
+    prompt = build_prompt(match)
+    hf_resp = call_hf(prompt)
 
+    # HF returns list or dict depending on model output
+    output_text = ""
+    if isinstance(hf_resp, list) and len(hf_resp) > 0:
+        output_text = hf_resp[0].get("generated_text", "")
+    elif isinstance(hf_resp, dict) and "generated_text" in hf_resp:
+        output_text = hf_resp.get("generated_text", "")
+    else:
+        output_text = str(hf_resp)
 
+    return {
+        "prediction": output_text,
+        "match": match
+    }
