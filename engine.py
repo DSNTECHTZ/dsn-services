@@ -1,6 +1,6 @@
-import requests
-import json
 import os
+import json
+import requests
 from datetime import datetime
 from flask import Flask, request, jsonify
 
@@ -9,24 +9,19 @@ from flask import Flask, request, jsonify
 # ==============================
 HF_MODEL = "gpt2-medium"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_TOKEN = os.getenv("HF_TOKEN")  # optional
 
-# Optional token (NOT REQUIRED)
-HF_TOKEN = os.getenv("HF_TOKEN")
-
-HEADERS = {
-    "Content-Type": "application/json"
-}
-
+HEADERS = {"Content-Type": "application/json"}
 if HF_TOKEN:
     HEADERS["Authorization"] = f"Bearer {HF_TOKEN}"
 
 # ==============================
-# APP
+# FLASK APP
 # ==============================
 app = Flask(__name__)
 
 # ==============================
-# AI REQUEST FUNCTION
+# AI CALL
 # ==============================
 def ask_ai(prompt):
     payload = {
@@ -38,28 +33,22 @@ def ask_ai(prompt):
             "do_sample": True
         }
     }
-
-    response = requests.post(
-        HF_API_URL,
-        headers=HEADERS,
-        data=json.dumps(payload),
-        timeout=60
-    )
-
-    if response.status_code != 200:
-        return f"AI Error: {response.text}"
-
-    result = response.json()
-    return result[0]["generated_text"]
+    try:
+        response = requests.post(HF_API_URL, headers=HEADERS, data=json.dumps(payload), timeout=60)
+        response.raise_for_status()
+        result = response.json()
+        return result[0]["generated_text"]
+    except Exception as e:
+        return f"AI Error: {str(e)}"
 
 # ==============================
-# PREDICTION LOGIC
+# BUILD PROMPT
 # ==============================
 def build_prompt(match_data):
     return f"""
 You are an AI football betting analyst.
 
-Analyze the current match data and predict the most likely winner.
+Analyze the match and predict the winner.
 
 MATCH DATE: {match_data['date']}
 LEAGUE: {match_data['league']}
@@ -111,23 +100,17 @@ def predict():
     prompt = build_prompt(match_data)
     prediction = ask_ai(prompt)
 
-    return jsonify({
-        "status": "success",
-        "prediction": prediction
-    })
+    return jsonify({"status": "success", "prediction": prediction})
 
 # ==============================
 # HEALTH CHECK
 # ==============================
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({
-        "status": "AI Betting Engine Running",
-        "model": HF_MODEL
-    })
+    return jsonify({"status": "AI Betting Engine Running", "model": HF_MODEL})
 
 # ==============================
 # RUN
 # ==============================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
