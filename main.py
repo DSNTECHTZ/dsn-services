@@ -3,13 +3,12 @@ import json
 import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY environment variable not set")
 
@@ -19,9 +18,15 @@ OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 app = FastAPI(title="AI Football Match Prediction Bot")
 
 # =====================================================
-# LOAD REAL CURRENT DATA (NO API KEY REQUIRED)
+# Pydantic model for POST requests
 # =====================================================
+class MatchRequest(BaseModel):
+    team_a: str
+    team_b: str
 
+# =====================================================
+# LOAD REAL CURRENT DATA
+# =====================================================
 def load_spi_data():
     try:
         df = pd.read_csv(SPI_DATA_URL)
@@ -32,7 +37,6 @@ def load_spi_data():
 # =====================================================
 # TEAM STATISTICS EXTRACTION
 # =====================================================
-
 def get_team_stats(df, team_name):
     matches = df[
         (df["team1"] == team_name) | (df["team2"] == team_name)
@@ -68,9 +72,8 @@ def get_team_stats(df, team_name):
     }
 
 # =====================================================
-# OPENAI HTTP REQUEST (NO SDK HELPERS)
+# OPENAI HTTP REQUEST
 # =====================================================
-
 def openai_prediction(team_a, team_b, stats_a, stats_b):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -113,54 +116,57 @@ Return valid JSON only:
     }
 
     try:
-        response = requests.post(
-            OPENAI_API_URL,
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-
+        response = requests.post(OPENAI_API_URL, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         result = response.json()
-        return result["choices"][0]["message"]["content"]
-
+        content = result["choices"][0]["message"]["content"]
+        # Ensure valid JSON
+        return json.loads(content)
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"OpenAI API request failed: {e}")
-    except KeyError:
-        raise RuntimeError("Unexpected OpenAI response format")
+    except (KeyError, json.JSONDecodeError):
+        raise RuntimeError(f"Unexpected OpenAI response format: {result}")
 
 # =====================================================
-# API ENDPOINT
+# API ENDPOINTS
 # =====================================================
 
+# POST endpoint for production frontend
 @app.post("/predict")
-def predict(team_a: str, team_b: str):
-    try:
-        df = load_spi_data()
+def predict_post(request: MatchRequest):
+    team_a = request.team_a
+    team_b = request.team_b
+    df = load_spi_data()
 
-        stats_a = get_team_stats(df, team_a)
-        stats_b = get_team_stats(df, team_b)
+    stats_a = get_team_stats(df, team_a)
+    stats_b = get_team_stats(df, team_b)
 
-        if not stats_a or not stats_b:
-            raise HTTPException(
-                status_code=404,
-                detail="One or both teams not found in current dataset"
-            )
+    if not stats_a or not stats_b:
+        raise HTTPException(status_code=404, detail="One or both teams not found in dataset")
 
-        ai_result = openai_prediction(team_a, team_b, stats_a, stats_b)
+    prediction = openai_prediction(team_a, team_b, stats_a, stats_b)
+    return {"team_a": team_a, "team_b": team_b, "prediction": prediction}
 
-        return {
-            "team_a": team_a,
-            "team_b": team_b,
-            "prediction": json.loads(ai_result)
-        }
+# GET endpoint for quick testing in browser
+@app.get("/predict")
+def predict_get(team_a: str, team_b: str):
+    df = load_spi_data()
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    stats_a = get_team_stats(df, team_a)
+    stats_b = get_team_stats(df, team_b)
 
+    if not stats_a or not stats_b:
+        return {"error": "One or both teams not found in dataset"}
+
+    prediction = openai_prediction(team_a, team_b, stats_a, stats_b)
+    return {"team_a": team_a, "team_b": team_b, "prediction": prediction}
+
+# Health check route
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "message": "Application running successfully"}
 
 # =====================================================
 # STARTUP CHECK
 # =====================================================
-
 print("SUCCESS: Application started correctly")
