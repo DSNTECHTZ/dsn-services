@@ -1,70 +1,86 @@
+import os
+import json
 import pandas as pd
 import requests
-from fastapi import FastAPI
-from openai import OpenAI
-import os
+from fastapi import FastAPI, HTTPException
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+# =====================================================
+# CONFIGURATION
+# =====================================================
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY environment variable not set")
+
 SPI_DATA_URL = "https://projects.fivethirtyeight.com/soccer-api/club/spi_matches.csv"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
-client = OpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="AI Match Prediction Bot")
+app = FastAPI(title="AI Football Match Prediction Bot")
 
-# -----------------------------
-# LOAD REAL CURRENT DATA
-# -----------------------------
+# =====================================================
+# LOAD REAL CURRENT DATA (NO API KEY REQUIRED)
+# =====================================================
+
 def load_spi_data():
-    df = pd.read_csv(SPI_DATA_URL)
-    return df
+    try:
+        df = pd.read_csv(SPI_DATA_URL)
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Failed to load SPI data: {e}")
 
-# -----------------------------
-# EXTRACT TEAM STATS
-# -----------------------------
-def get_team_form(df, team_name):
-    team_matches = df[
+# =====================================================
+# TEAM STATISTICS EXTRACTION
+# =====================================================
+
+def get_team_stats(df, team_name):
+    matches = df[
         (df["team1"] == team_name) | (df["team2"] == team_name)
     ].sort_values("date", ascending=False).head(5)
 
-    if team_matches.empty:
+    if matches.empty:
         return None
 
     goals_for = 0
     goals_against = 0
     wins = 0
 
-    for _, row in team_matches.iterrows():
+    for _, row in matches.iterrows():
         if row["team1"] == team_name:
             goals_for += row["score1"]
             goals_against += row["score2"]
             if row["score1"] > row["score2"]:
                 wins += 1
+            spi = row["spi1"]
         else:
             goals_for += row["score2"]
             goals_against += row["score1"]
             if row["score2"] > row["score1"]:
                 wins += 1
-
-    spi_rating = team_matches.iloc[0]["spi1"] if team_matches.iloc[0]["team1"] == team_name else team_matches.iloc[0]["spi2"]
+            spi = row["spi2"]
 
     return {
-        "recent_matches": len(team_matches),
+        "matches_analyzed": len(matches),
         "wins_last_5": wins,
         "goals_scored": goals_for,
         "goals_conceded": goals_against,
-        "spi_rating": spi_rating
+        "spi_rating": round(float(spi), 2)
     }
 
-# -----------------------------
-# OPENAI ANALYSIS
-# -----------------------------
-def ai_predict(team_a, team_b, stats_a, stats_b):
-    prompt = f"""
-You are a professional football match analyst.
+# =====================================================
+# OPENAI HTTP REQUEST (NO SDK HELPERS)
+# =====================================================
 
-Use ONLY the data provided below.
+def openai_prediction(team_a, team_b, stats_a, stats_b):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    prompt = f"""
+You are a professional football analyst.
+
+Use ONLY the provided data.
 
 Team A: {team_a}
 Stats: {stats_a}
@@ -73,52 +89,78 @@ Team B: {team_b}
 Stats: {stats_b}
 
 Tasks:
-1. Predict the most likely winner
-2. Give win probabilities for both teams
-3. Explain clearly why one team is likely to win or lose
-4. Mention form, attack, defense, and SPI rating
+- Predict the winner
+- Provide win probabilities
+- Explain clearly why one team may win or lose
+- Mention form, attack, defense, and SPI rating
 
-Respond in JSON format:
+Return valid JSON only:
 {{
   "winner": "",
-  "team_a_win_probability": "",
-  "team_b_win_probability": "",
+  "team_a_probability": "",
+  "team_b_probability": "",
   "analysis": ""
 }}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You analyze football matches using statistical data."},
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "You analyze football matches using statistical data only."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.35
-    )
+        "temperature": 0.35
+    }
 
-    return response.choices[0].message.content
+    try:
+        response = requests.post(
+            OPENAI_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
 
-# -----------------------------
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"OpenAI API request failed: {e}")
+    except KeyError:
+        raise RuntimeError("Unexpected OpenAI response format")
+
+# =====================================================
 # API ENDPOINT
-# -----------------------------
+# =====================================================
+
 @app.post("/predict")
 def predict(team_a: str, team_b: str):
-    df = load_spi_data()
+    try:
+        df = load_spi_data()
 
-    stats_a = get_team_form(df, team_a)
-    stats_b = get_team_form(df, team_b)
+        stats_a = get_team_stats(df, team_a)
+        stats_b = get_team_stats(df, team_b)
 
-    if not stats_a or not stats_b:
+        if not stats_a or not stats_b:
+            raise HTTPException(
+                status_code=404,
+                detail="One or both teams not found in current dataset"
+            )
+
+        ai_result = openai_prediction(team_a, team_b, stats_a, stats_b)
+
         return {
-            "error": "One or both teams not found in current dataset."
+            "team_a": team_a,
+            "team_b": team_b,
+            "prediction": json.loads(ai_result)
         }
 
-    prediction = ai_predict(team_a, team_b, stats_a, stats_b)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "team_a": team_a,
-        "team_b": team_b,
-        "prediction": prediction
-    }        "prediction": output_text,
-        "match": match
-    }
+
+# =====================================================
+# STARTUP CHECK
+# =====================================================
+
+print("SUCCESS: Application started correctly")
