@@ -1,64 +1,53 @@
 import os
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from openai import OpenAI
 
 app = Flask(__name__)
+CORS(app)  # Inaruhusu Frontend yako kuwasiliana na hii Backend
 
-# --- CONFIGURATION ---
-# Tunachukua API KEY kutoka kwa Render Environment Variables kwa usalama
-api_key = os.environ.get("DEEPSEEK_API_KEY")
-client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+# Weka API Key yako hapa au tumia Environment Variable (Inashauriwa zaidi)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-22b7b924a538428ab952959c8c2022ec")
+client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
-# --- SYSTEM PROMPT (AKILI YA BOT) ---
-# Hapa ndipo tunapomfundisha bot kuwa DSN Assistant na si vinginevyo.
-SYSTEM_INSTRUCTION = """
-Wewe ni 'DSN Assistant', mtoa huduma msaidizi (customer support) wa kampuni inayoitwa DSN Technology.
+# MAELEKEZO YA BOT (System Prompt)
+SYSTEM_PROMPT = """
+Wewe ni 'DSN ASSISTANT', mtoa huduma wa kidijitali wa kampuni ya DSN Technology.
+Kazi yako ni kutoa huduma kwa Kiswahili na Kiingereza.
 
-MAAGIZO YA KAZI YAKO:
-1. Lugha Kuu: Kiswahili na English.
-2. Jibu maswali yanayohusu huduma, bei, na bidhaa za DSN Technology TU.
-3. Usijibu maswali ya siasa, mapishi, michezo, au kampuni nyingine yoyote.
-4. Ukiona mteja anauliza kitu kisichohusu DSN, sema kwa heshima: "Samahani, mimi ni msaidizi wa DSN Technology pekee. Naweza kukusaidia na huduma zetu."
-5. Ukiona huelewi swali, au mteja anahitaji msaada wa kina ambao huwezi kutatua, mpe namba hii ya WhatsApp: 0745720609.
-6. Kuwa rafiki, professional, na mfupi kwenye maelezo isipokuwa ukiulizwa ufafanuzi.
+SHERIA KUU:
+1. Jibu maswali yanayohusu DSN Technology TU. Usijibu kitu kingine chochote nje ya hapo.
+2. Huduma zetu ni: [Taja huduma zako hapa - mfano: Graphics Design, Web Dev, Software, n.k].
+3. Bei zetu ni: [Weka bei zako hapa kulingana na huduma].
+4. Lengo lako ni kuelewa mteja anahitaji nini na kumpa majibu sahihi papo hapo.
+5. Ikiwa mteja anahitaji msaada zaidi au anataka kulipa, mpe namba yetu ya WhatsApp: 0745720609.
 
-MUKTADHA WA DSN TECHNOLOGY (Tumia hizi data kujibu):
-- Kampuni: DSN Technology.
-- Mawasiliano: 0745720609 (WhatsApp/Call).
-- Huduma zetu: (Weka orodha ya huduma zako hapa, mfano: Kutengeneza Website, Graphics Design, System Development, n.k - Jaza unavyotaka).
+Kuwa na adabu, mchangamfu, na mtaalamu.
 """
-
-@app.route('/')
-def home():
-    return "DSN Assistant Bot is Running!"
 
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
         data = request.json
-        user_message = data.get('message')
+        user_message = data.get("message")
 
         if not user_message:
             return jsonify({"error": "No message provided"}), 400
 
-        # Tuma maombi kwa DeepSeek API
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            stream=False,
-            temperature=0.7 # 0.7 inafanya majibu yawe ya ubunifu kidogo lakini sahihi
+            stream=False
         )
 
-        bot_reply = response.choices[0].message.content
-        return jsonify({"reply": bot_reply})
+        reply = response.choices[0].message.content
+        return jsonify({"reply": reply})
 
     except Exception as e:
-        # Ikitokea error yoyote, tunarudisha ujumbe huu
-        return jsonify({"reply": "Samahani, kuna tatizo la kiufundi. Tafadhali wasiliana nasi WhatsApp 0745720609."}), 500
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    # Hii inatumika local tu, Render itatumia Gunicorn
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
