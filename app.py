@@ -1,40 +1,69 @@
 import os
-import json
-import pandas as pd
-import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from openai import OpenAI
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY environment variable not set")
+# Initialize Flask
+app = Flask(__name__)
 
-SPI_DATA_URL = "https://projects.fivethirtyeight.com/soccer-api/club/spi_matches.csv"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-
-app = FastAPI(title="DSN AI Match Prediction API")
-
-# =====================================================
-# CORS (ALLOW ALL DOMAINS)
-# =====================================================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # allow all domains
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# OpenAI Client
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY")
 )
 
-# =====================================================
-# ROOT ROUTE
-# =====================================================
-@app.get("/")
-def root():
-    return {
+# System prompt – DSN Technology ONLY
+SYSTEM_PROMPT = """
+Wewe ni AI Msaidizi rasmi wa DSN Technology.
+Jibu maswali KUHUSU DSN Technology TU.
+USIJIBU mada nyingine yoyote.
+
+Huduma za DSN Technology:
+1. Kutengeneza Website (kuanzia 49,000 TZS)
+2. Website za Biashara & Company
+3. Logo Design (2D & 3D)
+4. Video Editing & Motion Graphics
+5. Mobile App Development
+6. AI Bots & Automation
+7. YouTube Channel Setup & Branding
+
+KANUNI:
+- Kama mteja anauliza kitu kisichohusu DSN Technology → mwelekeze kwenye huduma zetu.
+- Toa bei pale inapowezekana.
+- Kama mteja anahitaji msaada zaidi → mpe WhatsApp: 0745720609
+- Lugha kuu: Kiswahili (changanya English kidogo kama inahitajika)
+- Jibu kwa ufupi na kwa biashara.
+"""
+
+@app.route("/", methods=["GET"])
+def home():
+    return "DSN Technology AI Bot is Running 🚀"
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    data = request.json
+    user_message = data.get("message", "")
+
+    if not user_message:
+        return jsonify({"reply": "Tafadhali andika swali lako."})
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message}
+        ]
+    )
+
+    reply = response.choices[0].message.content
+
+    # Hakikisha WhatsApp inatajwa kama msaada zaidi
+    if "0745720609" not in reply:
+        reply += "\n\n📞 Kwa msaada zaidi WhatsApp: 0745720609"
+
+    return jsonify({"reply": reply})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)    return {
         "message": "DSN AI Match Prediction API is running",
         "endpoints": ["/predict", "/health", "/docs"]
     }
