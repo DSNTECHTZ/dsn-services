@@ -4,7 +4,7 @@ from openai import OpenAI
 import os
 
 app = Flask(__name__)
-CORS(app)  # 👈 HII NDIO FIX KUU
+CORS(app)  # Hii inaruhusu browser kufanya request
 
 client = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -44,4 +44,4 @@ def chat():
     })
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=10000)
